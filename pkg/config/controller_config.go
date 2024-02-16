@@ -24,6 +24,7 @@ const (
 	flagBackendSecurityGroup                         = "backend-security-group"
 	flagEnableEndpointSlices                         = "enable-endpoint-slices"
 	flagDisableRestrictedSGRules                     = "disable-restricted-sg-rules"
+	flagSubnetDiscoverySortingAlgorithm              = "subnet-discovery-sorting-algorithm"
 	defaultLogLevel                                  = "info"
 	defaultMaxConcurrentReconciles                   = 3
 	defaultMaxExponentialBackoffDelay                = time.Second * 1000
@@ -31,6 +32,7 @@ const (
 	defaultEnableBackendSG                           = true
 	defaultEnableEndpointSlices                      = false
 	defaultDisableRestrictedSGRules                  = false
+	defaultSubnetDiscoverySortingAlgorithm           = "id"
 )
 
 var (
@@ -41,6 +43,11 @@ var (
 		"ingress.k8s.aws/resource",
 		"service.k8s.aws/stack",
 		"service.k8s.aws/resource",
+	)
+	subnetSortingAlgorithms = sets.NewString(
+		"id",
+		"azfirst",      // availability zone locale has higher priority
+		"outpostfirst", // outpost locale has higher priority
 	)
 )
 
@@ -94,6 +101,9 @@ type ControllerConfig struct {
 	DisableRestrictedSGRules bool
 
 	FeatureGates FeatureGates
+
+	// SubnetDiscoverySortingAlgorithm specifies how subnets should be sorted if multiple are found in the same availability zone.
+	SubnetDiscoverySortingAlgorithm string
 }
 
 // BindFlags binds the command line flags to the fields in the config object
@@ -121,6 +131,8 @@ func (cfg *ControllerConfig) BindFlags(fs *pflag.FlagSet) {
 		"Enable EndpointSlices for IP targets instead of Endpoints")
 	fs.BoolVar(&cfg.DisableRestrictedSGRules, flagDisableRestrictedSGRules, defaultDisableRestrictedSGRules,
 		"Disable the usage of restricted security group rules")
+	fs.StringVar(&cfg.SubnetDiscoverySortingAlgorithm, flagSubnetDiscoverySortingAlgorithm, defaultSubnetDiscoverySortingAlgorithm,
+		"Set sorting algorithm in case multiple subnets are found in the same availability zone")
 
 	cfg.FeatureGates.BindFlags(fs)
 	cfg.AWSConfig.BindFlags(fs)
@@ -148,6 +160,9 @@ func (cfg *ControllerConfig) Validate() error {
 		return err
 	}
 	if err := cfg.validateBackendSecurityGroupConfiguration(); err != nil {
+		return err
+	}
+	if err := cfg.validateSubnetSortingAlgorithm(); err != nil {
 		return err
 	}
 	return nil
@@ -187,6 +202,13 @@ func (cfg *ControllerConfig) validateBackendSecurityGroupConfiguration() error {
 	}
 	if !strings.HasPrefix(cfg.BackendSecurityGroup, "sg-") {
 		return errors.Errorf("invalid value %v for backend security group id", cfg.BackendSecurityGroup)
+	}
+	return nil
+}
+
+func (cfg *ControllerConfig) validateSubnetSortingAlgorithm() error {
+	if !subnetSortingAlgorithms.Has(cfg.SubnetDiscoverySortingAlgorithm) {
+		return errors.Errorf("invalid value %v for subnet sorting algorithm", cfg.SubnetDiscoverySortingAlgorithm)
 	}
 	return nil
 }

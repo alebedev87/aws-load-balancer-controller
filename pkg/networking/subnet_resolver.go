@@ -109,13 +109,14 @@ type SubnetsResolver interface {
 }
 
 // NewDefaultSubnetsResolver constructs new defaultSubnetsResolver.
-func NewDefaultSubnetsResolver(azInfoProvider AZInfoProvider, ec2Client services.EC2, vpcID string, clusterName string, logger logr.Logger) *defaultSubnetsResolver {
+func NewDefaultSubnetsResolver(azInfoProvider AZInfoProvider, ec2Client services.EC2, vpcID string, clusterName, sortingAlgorithm string, logger logr.Logger) *defaultSubnetsResolver {
 	return &defaultSubnetsResolver{
-		azInfoProvider: azInfoProvider,
-		ec2Client:      ec2Client,
-		vpcID:          vpcID,
-		clusterName:    clusterName,
-		logger:         logger,
+		azInfoProvider:   azInfoProvider,
+		ec2Client:        ec2Client,
+		vpcID:            vpcID,
+		clusterName:      clusterName,
+		logger:           logger,
+		sortingAlgorithm: sortingAlgorithm,
 	}
 }
 
@@ -123,11 +124,12 @@ var _ SubnetsResolver = &defaultSubnetsResolver{}
 
 // default implementation for SubnetsResolver.
 type defaultSubnetsResolver struct {
-	azInfoProvider AZInfoProvider
-	ec2Client      services.EC2
-	vpcID          string
-	clusterName    string
-	logger         logr.Logger
+	azInfoProvider   AZInfoProvider
+	ec2Client        services.EC2
+	vpcID            string
+	clusterName      string
+	sortingAlgorithm string
+	logger           logr.Logger
 }
 
 func (r *defaultSubnetsResolver) ResolveViaDiscovery(ctx context.Context, opts ...SubnetsResolveOption) ([]*ec2sdk.Subnet, error) {
@@ -177,6 +179,36 @@ func (r *defaultSubnetsResolver) ResolveViaDiscovery(ctx context.Context, opts .
 						return true
 					}
 					return false
+				}
+				if r.sortingAlgorithm != "id" /*not by subnetid*/ {
+					localeTypeI, err := r.buildSDKSubnetLocaleType(ctx, subnets[i])
+					if err != nil {
+						r.logger.Info("error while building subnet locale type", "subnet", subnets[i], "error", err)
+					}
+					localeTypeJ, err := r.buildSDKSubnetLocaleType(ctx, subnets[j])
+					if err != nil {
+						r.logger.Info("error while building subnet locale type", "subnet", subnets[j], "error", err)
+					}
+					if err == nil && localeTypeI != localeTypeJ {
+						switch r.sortingAlgorithm {
+						case "azfirst":
+							if localeTypeI == subnetLocaleTypeAvailabilityZone {
+								return false
+							}
+							if localeTypeJ == subnetLocaleTypeAvailabilityZone {
+								return true
+							}
+							// continue to the sorting by ID if none of the subnets is of AZ locale
+						case "outpostfirst":
+							if localeTypeI == subnetLocaleTypeOutpost {
+								return false
+							}
+							if localeTypeJ == subnetLocaleTypeOutpost {
+								return true
+							}
+							// continue to the sorting by ID if none of the subnets is of Outpost locale
+						}
+					}
 				}
 				return awssdk.StringValue(subnets[i].SubnetId) < awssdk.StringValue(subnets[j].SubnetId)
 			})
